@@ -50,6 +50,39 @@ Where:
 - `r`: Rank (dimensionality of the bottleneck)
 - `α`: Scaling hyperparameter
 
+Code example:
+```
+class LoRALinear(nn.Module):
+    def __init__(self, original_linear: nn.Linear, r: int = 4, alpha: int = 16):
+        super().__init__()
+        self.in_features = original_linear.in_features
+        self.out_features = original_linear.out_features
+        self.r = r
+        self.alpha = alpha
+
+        # Original frozen weight
+        self.weight = original_linear.weight
+        self.bias = original_linear.bias
+
+        # LoRA adapters (A: down-projection, B: up-projection)
+        self.A = nn.Parameter(torch.randn(r, self.in_features) * 0.01)
+        self.B = nn.Parameter(torch.randn(self.out_features, r) * 0.01)
+
+        # Scaling factor
+        self.scaling = self.alpha / self.r
+
+        # Freeze the original weight
+        self.weight.requires_grad = False
+        if self.bias is not None:
+            self.bias.requires_grad = False
+
+    def forward(self, x):
+        # LoRA: W(x) + alpha/r * BA(x)
+        lora_update = (x @ self.A.T) @ self.B.T
+        return nn.functional.linear(x, self.weight) + self.scaling * lora_update
+
+```
+
 ### Injection Points
 LoRA adapters are injected into:
 - Query projection layers (`attention.self.query`)
