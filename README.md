@@ -1,118 +1,147 @@
-## ⚙️ Try It Yourself
-
-[Open in Colab](https://colab.research.google.com/drive/1wpDmCpdYWE4sy12AD69ftBsSmAkj7BI6?usp=sharing)  
-
-# LoRA Fine-Tuning for BERT on SST-2 Sentiment Analysis
-
-A comprehensive implementation of Low-Rank Adaptation (LoRA) for efficient fine-tuning of BERT models on the Stanford Sentiment Treebank (SST-2) dataset for binary sentiment classification.
+# LoRA Fine-tuning for BERT on SST-2 Sentiment Analysis
 
 ## Overview
 
-This notebook demonstrates how to implement and apply LoRA to BERT for sentiment analysis, achieving competitive performance while training only a small fraction of the model's parameters. LoRA enables efficient fine-tuning by injecting trainable low-rank matrices into the attention layers while keeping the original pre-trained weights frozen.
+This project implements **Low-Rank Adaptation (LoRA)** for efficient fine-tuning of BERT on the Stanford Sentiment Treebank (SST-2) dataset. LoRA enables parameter-efficient transfer learning by injecting trainable low-rank matrices into the attention layers while keeping the pretrained weights frozen.
 
-## Key Features
+## Key Results
 
-- **Parameter Efficiency**: Trains only 147,456 parameters (~0.13% of BERT-base) using LoRA adapters
-- **Custom LoRA Implementation**: Built-from-scratch LoRA module with configurable rank and alpha
-- **High Performance**: Achieves ~91.7% accuracy on SST-2 validation set
-- **Attention Layer Injection**: Applies LoRA to Query and Value projections in self-attention
-- **Real-time Inference**: Includes sentiment prediction pipeline for custom text
+### Model Performance
+- **Final Validation Accuracy**: **91.74%**
+- **Training Epochs**: 3
+- **Batch Size**: 32 (training), 64 (validation)
 
-## Dataset
+### Training Progress
+| Epoch | Train Loss | Validation Accuracy |
+|-------|------------|---------------------|
+| 1     | 0.3326     | 89.91%             |
+| 2     | 0.2424     | 90.94%             |
+| 3     | 0.2150     | 91.74%             |
 
-**SST-2 (Stanford Sentiment Treebank - Binary)**
-- **Task**: Binary sentiment classification (Positive/Negative)
-- **Training samples**: 67,349
-- **Validation samples**: 872
-- **Test samples**: 1,821
-- **Source**: GLUE benchmark via Hugging Face datasets
+### Classification Metrics (Epoch 3)
+| Class    | Precision | Recall | F1-Score | Support |
+|----------|-----------|--------|----------|---------|
+| Negative | 0.897     | 0.939  | 0.918    | 428     |
+| Positive | 0.939     | 0.896  | 0.917    | 444     |
+| **Weighted Avg** | **0.918** | **0.917** | **0.917** | **872** |
 
-## Architecture
+### Parameter Efficiency
+- **LoRA Trainable Parameters**: **147,456** (~0.13% of BERT-base's 110M parameters)
+- **LoRA Configuration**:
+  - Rank (r): 4
+  - Alpha (α): 16
+  - Scaling factor: α/r = 4
 
-### LoRA Configuration
+This represents a **~750x reduction** in trainable parameters compared to full fine-tuning, while maintaining competitive performance.
 
-```python
-r (rank) = 4          # Low-rank dimension
-alpha = 16            # Scaling factor
-scaling = alpha / r   # Final scaling: 4.0
+## Architecture Details
+
+### LoRA Implementation
+LoRA modifies the attention mechanism by adding low-rank decomposition matrices:
+
 ```
-
-### Modified Layers
-
-LoRA adapters are injected into:
-- **Query projections** in all 12 BERT attention layers
-- **Value projections** in all 12 BERT attention layers
-
-The forward pass computes:
-```
-output = W(x) + (alpha/r) * B(A(x))
+W' = W + (α/r) · B · A
 ```
 
 Where:
-- W: Original frozen weight matrix (768 × 768)
-- A: Down-projection matrix (4 × 768) - trainable
-- B: Up-projection matrix (768 × 4) - trainable
+- `W`: Original frozen weight matrix
+- `A`: Down-projection matrix (r × d_in)
+- `B`: Up-projection matrix (d_out × r)
+- `r`: Rank (dimensionality of the bottleneck)
+- `α`: Scaling hyperparameter
+
+### Injection Points
+LoRA adapters are injected into:
+- Query projection layers (`attention.self.query`)
+- Value projection layers (`attention.self.value`)
+
+All 12 BERT encoder layers receive LoRA adapters (24 total injection points).
+
+## Dataset
+
+**SST-2 (Stanford Sentiment Treebank v2)**
+- **Task**: Binary sentiment classification
+- **Training samples**: 67,349
+- **Validation samples**: 872
+- **Test samples**: 1,821
+- **Classes**: Negative (0), Positive (1)
+- **Max sequence length**: 128 tokens
 
 ## Requirements
 
 ```bash
-transformers
-datasets
-scikit-learn
-torch
-numpy
-tqdm
+pip install transformers datasets scikit-learn torch
 ```
 
-Install dependencies:
-```bash
-pip install transformers datasets scikit-learn --quiet
-```
-
-## Hardware Requirements
-
-- **Recommended**: GPU with CUDA support (T4, V100, A100, etc.)
-- **Minimum**: CPU (training will be significantly slower)
-- **RAM**: 8GB+ recommended
-- **VRAM**: 4GB+ for GPU training
+### Dependencies
+- `transformers`: Hugging Face Transformers library
+- `datasets`: Hugging Face Datasets library
+- `scikit-learn`: Evaluation metrics
+- `torch`: PyTorch framework
+- `tqdm`: Progress bars
 
 ## Usage
 
-### 1. Setup and Training
-
-Run all cells sequentially in Google Colab or Jupyter:
-
+### 1. Environment Setup
 ```python
-# The notebook will automatically:
-# 1. Load and tokenize SST-2 dataset
-# 2. Initialize BERT-base-uncased
-# 3. Inject LoRA adapters into attention layers
-# 4. Freeze all parameters except LoRA matrices
-# 5. Train for 3 epochs with AdamW optimizer
+import torch
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 ```
 
-### 2. Training Configuration
-
+### 2. Load Dataset and Tokenizer
 ```python
-batch_size = 32           # Training batch size
-val_batch_size = 64       # Validation batch size
-learning_rate = 1e-4      # AdamW learning rate
-epochs = 3                # Training epochs
-max_length = 128          # Maximum sequence length
-```
-
-### 3. Inference on Custom Text
-
-```python
+from datasets import load_dataset
 from transformers import BertTokenizer
 
+dataset = load_dataset("glue", "sst2")
 tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+```
 
+### 3. Inject LoRA into BERT
+```python
+from transformers import BertForSequenceClassification
+
+model = BertForSequenceClassification.from_pretrained(
+    "bert-base-uncased", 
+    num_labels=2
+)
+inject_lora_into_bert(model, r=4, alpha=16)
+model.to(device)
+```
+
+### 4. Freeze Base Model, Enable LoRA Parameters
+```python
+for param in model.parameters():
+    param.requires_grad = False
+
+for name, param in model.named_parameters():
+    if "A" in name or "B" in name:
+        param.requires_grad = True
+```
+
+### 5. Training
+```python
+from torch.optim import AdamW
+
+optimizer = AdamW(
+    filter(lambda p: p.requires_grad, model.parameters()), 
+    lr=1e-4
+)
+
+# Train for 3 epochs (see notebook for full training loop)
+```
+
+### 6. Inference
+```python
 def predict_sentiment(text, model, tokenizer):
     model.eval()
-    inputs = tokenizer(text, return_tensors="pt", 
-                      padding=True, truncation=True, 
-                      max_length=128).to(device)
+    inputs = tokenizer(
+        text, 
+        return_tensors="pt", 
+        padding=True, 
+        truncation=True, 
+        max_length=128
+    ).to(device)
     
     with torch.no_grad():
         logits = model(**inputs).logits
@@ -122,90 +151,60 @@ def predict_sentiment(text, model, tokenizer):
     
     label = "Positive" if pred == 1 else "Negative"
     return label, confidence
-
-# Example usage
-text = "This movie was absolutely fantastic!"
-label, confidence = predict_sentiment(text, model_lora, tokenizer)
-print(f"{label} ({confidence:.2f})")
 ```
 
-## Results
+## Sample Predictions
 
-### Performance Metrics
+| Sentence | Prediction | Confidence |
+|----------|------------|------------|
+| "The movie was fantastic and thrilling!" | Positive | 0.98 |
+| "I wouldn't recommend it to anyone." | Negative | 0.90 |
+| "It was okay, not great but not bad." | Positive | 0.93 |
+| "This is one of the best performances I've seen." | Positive | 0.98 |
+| "The film lacked a solid storyline." | Negative | 0.98 |
 
-| Metric | LoRA BERT |
-|--------|-----------|
-| **Validation Accuracy** | 91.74% |
-| **Training Loss (Epoch 3)** | 0.2150 |
-| **Trainable Parameters** | 147,456 |
-| **Total Parameters** | ~110M |
-| **% Trainable** | 0.13% |
+## Training Configuration
 
-### Classification Report
-
-```
-                 precision    recall  f1-score   support
-Negative (0)        0.897     0.939     0.918       428
-Positive (1)        0.939     0.896     0.917       444
-
-accuracy                                0.917       872
-macro avg           0.918     0.918     0.917       872
-weighted avg        0.918     0.917     0.917       872
-```
-
-### Training Progress
-
-```
-Epoch 1/3: Train Loss: 0.3326 | Val Accuracy: 0.8991
-Epoch 2/3: Train Loss: 0.2424 | Val Accuracy: 0.9094
-Epoch 3/3: Train Loss: 0.2150 | Val Accuracy: 0.9174
-```
-
-## Implementation Details
-
-### LoRA Module Architecture
-
-```python
-class LoRALinear(nn.Module):
-    def __init__(self, original_linear, r=4, alpha=16):
-        # Down-projection: (batch, seq, 768) → (batch, seq, 4)
-        self.A = nn.Parameter(torch.randn(r, in_features) * 0.01)
-        
-        # Up-projection: (batch, seq, 4) → (batch, seq, 768)
-        self.B = nn.Parameter(torch.randn(out_features, r) * 0.01)
-        
-        # Scaling factor
-        self.scaling = alpha / r
-```
-
-### Parameter Freezing Strategy
-
-1. All BERT pre-trained weights are frozen
-2. Only LoRA matrices (A and B) are trainable
-3. Classifier head remains trainable (default BERT behavior)
-4. Total trainable: 147,456 parameters
+| Hyperparameter | Value |
+|----------------|-------|
+| Learning Rate | 1e-4 |
+| Optimizer | AdamW |
+| Batch Size (train) | 32 |
+| Batch Size (val) | 64 |
+| Epochs | 3 |
+| Max Sequence Length | 128 |
+| LoRA Rank (r) | 4 |
+| LoRA Alpha (α) | 16 |
 
 ## Advantages of LoRA
 
-1. **Memory Efficient**: Only stores small adapter matrices
-2. **Fast Training**: Fewer parameters to update
-3. **Modularity**: Easy to swap adapters for different tasks
-4. **No Inference Overhead**: Can merge adapters with base weights
-5. **Storage Efficient**: Save only 0.5MB vs 440MB for full model
+1. **Memory Efficiency**: Only 147K trainable parameters vs. 110M for full fine-tuning
+2. **Training Speed**: Faster convergence due to fewer parameters to update
+3. **Storage**: Multiple task-specific adapters can be stored without duplicating the base model
+4. **Performance**: Achieves 91.74% accuracy, comparable to full fine-tuning
+5. **Modularity**: Easy to switch between different task adapters at inference time
 
-## Potential Improvements
+## File Structure
 
-- Experiment with different rank values (r=8, r=16)
-- Apply LoRA to all linear layers (FFN, Key projections)
-- Implement learning rate scheduling
-- Add gradient accumulation for larger effective batch sizes
-- Try different alpha values for scaling
-- Experiment with LoRA dropout
-- Test on other GLUE tasks
+```
+.
+├── LoRA_BERT_SST2_CLEAN.ipynb    # Main notebook with implementation
+└── README.md                      # This file
+```
+
+## References
+
+- **LoRA Paper**: [LoRA: Low-Rank Adaptation of Large Language Models](https://arxiv.org/abs/2106.09685)
+- **BERT**: [BERT: Pre-training of Deep Bidirectional Transformers](https://arxiv.org/abs/1810.04805)
+- **SST-2 Dataset**: [Stanford Sentiment Treebank](https://nlp.stanford.edu/sentiment/)
+
+## License
+
+This project is for educational purposes. Please refer to the respective licenses of BERT, Hugging Face libraries, and the SST-2 dataset.
 
 ## Citation
 
-If you use this implementation, please cite:
+If you use this implementation, please cite the original LoRA paper:
 
 ```bibtex
 @article{hu2021lora,
@@ -216,30 +215,6 @@ If you use this implementation, please cite:
 }
 ```
 
-## Troubleshooting
+---
 
-### CUDA Out of Memory
-- Reduce batch size to 16 or 8
-- Reduce max_length to 64
-- Use gradient accumulation
-
-### Low Accuracy
-- Increase training epochs (5-10)
-- Try different learning rates (1e-3, 5e-5)
-- Increase LoRA rank to 8 or 16
-
-### Slow Training
-- Enable GPU in Colab: Runtime → Change runtime type → GPU
-- Use mixed precision training with `torch.cuda.amp`
-- Increase batch size if memory allows
-
-## License
-
-This implementation is provided for educational purposes. BERT and the SST-2 dataset have their own respective licenses.
-
-## Acknowledgments
-
-- **BERT**: Devlin et al., Google AI Language
-- **LoRA**: Hu et al., Microsoft
-- **SST-2**: Socher et al., Stanford NLP
-- **Hugging Face**: Transformers and Datasets libraries
+**Note**: This implementation demonstrates LoRA on BERT-base for sentiment analysis. The technique is applicable to other transformer models and tasks with minimal modifications.
